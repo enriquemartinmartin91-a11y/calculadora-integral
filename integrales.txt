@@ -1,0 +1,129 @@
+import os, uuid
+import threading
+from flask import Flask, render_template, request
+import sympy as sp
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
+# 1. Crear directorios base
+os.makedirs('static', exist_ok=True)
+os.makedirs('templates', exist_ok=True)
+
+# 2. Crear la plantilla index.html para evitar errores de TemplateNotFound
+html_content = """<!DOCTYPE html>
+<html>
+<head>
+    <title>Calculadora de Integrales</title>
+</head>
+<body>
+    <h1>Calculadora de Integrales con SymPy</h1>
+    <form method="POST">
+        <p>
+            Función: <input type="text" name="funcion" value="{{ funcion }}">
+        </p>
+        <p>
+            Tipo:
+            <select name="tipo">
+                <option value="definida">Definida</option>
+                <option value="indefinida">Indefinida</option>
+                <option value="def_0_inf">De 0 a infinito</option>
+            </select>
+        </p>
+        <p>
+            Límite a: <input type="text" name="a" value="{{ a }}">
+            Límite b: <input type="text" name="b" value="{{ b }}">
+        </p>
+        <button type="submit">Calcular</button>
+    </form>
+
+    {% if resultado %}
+        <h2>Resultado:</h2>
+        <p>{{ resultado }}</p>
+    {% endif %}
+
+    {% if grafico %}
+        <h2>Gráfico:</h2>
+        <img src="/{{ grafico }}" alt="Gráfica" />
+    {% endif %}
+</body>
+</html>
+"""
+
+with open('templates/index.html', 'w') as f:
+    f.write(html_content)
+
+# 3. Configurar Flask
+app = Flask(__name__)
+x_sym = sp.symbols('x')
+
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    resultado = ""
+    funcion_str = "exp(-x)"
+    grafico = None
+    a_val = 0
+    b_val = 1
+
+    if request.method == 'POST':
+        funcion_str = request.form.get('funcion', 'exp(-x)')
+        tipo = request.form.get('tipo')
+        try:
+            a_val = float(request.form.get('a', 0))
+            b_val = float(request.form.get('b', 1))
+        except:
+            a_val, b_val = 0, 1
+
+        try:
+            f_sym = sp.sympify(funcion_str)
+            f_num = sp.lambdify(x_sym, f_sym, 'numpy')
+
+            if tipo == 'indefinida':
+                res = sp.integrate(f_sym, x_sym)
+                resultado = f"∫ {funcion_str} dx = {res} + C"
+
+            elif tipo == 'def_0_inf':
+                res = sp.integrate(f_sym, (x_sym, 0, sp.oo))
+                if res.has(sp.oo) or res.has(sp.zoo) or res.has(sp.nan):
+                    resultado = f"∫₀^∞ {funcion_str} dx DIVERGE"
+                else:
+                    resultado = f"∫₀^∞ {funcion_str} dx = {res} ≈ {float(res.evalf()):.5f}"
+                    xs = np.linspace(0, 10, 400)
+                    ys = f_num(xs)
+                    plt.figure()
+                    plt.plot(xs, ys)
+                    plt.fill_between(xs, ys, alpha=0.3)
+                    plt.title(f"{funcion_str} de 0 a ∞ ≈ 0 a 10")
+                    nombre = f"{uuid.uuid4().hex}.png"
+                    plt.savefig(f"static/{nombre}")
+                    plt.close()
+                    grafico = f"static/{nombre}"
+
+            else: # definida
+                res = sp.integrate(f_sym, (x_sym, a_val, b_val))
+                resultado = f"∫_{a_val}^{b_val} {funcion_str} dx = {res} ≈ {float(res.evalf()):.5f}"
+                
+                xs = np.linspace(a_val, b_val, 400)
+                ys = f_num(xs)
+                plt.figure()
+                plt.plot(xs, ys)
+                plt.fill_between(xs, ys, alpha=0.3)
+                plt.title(f"Área de {a_val} a {b_val}")
+                nombre = f"{uuid.uuid4().hex}.png"
+                plt.savefig(f"static/{nombre}")
+                plt.close()
+                grafico = f"static/{nombre}"
+
+        except Exception as e:
+            resultado = f"Error: {e}"
+
+    return render_template('index.html', resultado=resultado, funcion=funcion_str, grafico=grafico, a=a_val, b=b_val)
+
+# 4. Función para correr la app en un hilo secundario
+def run_app():
+    app.run(port=5000, debug=False, use_reloader=False)
+
+# Iniciamos el hilo si no está ya corriendo
+threading.Thread(target=run_app, daemon=True).start()
+print("Servidor Flask iniciado en segundo plano en http://127.0.0.1:5000")
